@@ -1,10 +1,6 @@
+import express from 'express';
 import Groq from 'groq-sdk';
 import dotenv from 'dotenv';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import pkg from 'outlines';
-const { TextGenerator } = pkg;
 
 dotenv.config();
 
@@ -12,145 +8,151 @@ const client = new Groq({
   apiKey: process.env['GROQ_API_KEY'],
 });
 
-
+/**
+ * @param {string} input - The concept for which to generate diagrams.
+ * @returns {Promise<Object>} - The JSON object with generated diagrams.
+ */
 async function processConcept(input) {
-  try {
-    // 1.Simplify concept with LLaMA
-    const simplifyResponse = await client.chat.completions.create({
-      messages: [{
+  const simplifyResponse = await client.chat.completions.create({
+    messages: [
+      {
+        role: 'system',
+        content: `You are an expert at converting complex concepts into multiple Mermaid diagrams.
+Respond ONLY with a valid JSON object in the exact following format:
+{
+  "diagrams": [
+    {
+      "title": "<TITLE_FOR_DIAGRAM_1>",
+      "code": "<MERMAID_CODE_FOR_DIAGRAM_1>"
+    },
+    {
+      "title": "<TITLE_FOR_DIAGRAM_2>",
+      "code": "<MERMAID_CODE_FOR_DIAGRAM_2>"
+    }
+    // You may include more diagrams if necessary.
+  ]
+}
+
+Here is a sample example:
+{
+  "diagrams": [
+    {
+      "title": "Photosynthesis Overview",
+      "code": "graph TD; Light-->Chlorophyll; Chlorophyll-->Photosynthesis;"
+    },
+    {
+      "title": "Chloroplast Structure",
+      "code": "graph LR; Stroma-->Grana; Grana-->Thylakoid_Membranes;"
+    }
+  ]
+}
+
+Do not include any additional text, markdown formatting, or explanations.`
+      },
+      {
         role: 'user',
-        content: `Break down the concept "${input}" into simple and easy-to-understand sections. 
-        Include examples where necessary.`
-      }],
-      model: 'llama-3.3-70b-versatile',
-    });
+        content: `Generate Mermaid diagrams for the concept: "${input}".`
+      }
+    ],
+    model: 'llama-3.3-70b-versatile',
+    response_format: { 
+      type: "json_object" 
+    },
+    max_tokens: 4096
+  });
 
-    const simplifiedContent = simplifyResponse.choices[0].message.content;
 
-  
-    const contentJson = constructConceptJson(simplifiedContent);
-
-    // 2. Generate Mermaid diagrams
-    const gemmaPrompt = `Using the simplified content ${simplifiedContent}, generate valid Mermaid.js diagrams where applicable`;
-
-    const gemmaResponse = await client.chat.completions.create({
-      messages: [{ role: 'user', content: gemmaPrompt }],
-      model: 'gemma2-9b-it',
-    });
-
-    const mermaidContent = gemmaResponse.choices[0].message.content;
-
-  
-    const diagramsJson = constructDiagramJson(mermaidContent);
-
-    //3: Write to files
-    writeToFile('simplified_concepts.json', contentJson);
-    writeToFile('mermaid_diagrams.json', diagramsJson);
-
-    // 4. create the third JSON structure
-    const mergedContent = await mergeJsonFiles(contentJson, diagramsJson);
-
-    // output.json
-    writeToFile('output.json', mergedContent);
-
-    //  HTML from output.json
-    generateHtmlFromJson('output.json', 'output.html');
-
+  let simplifiedJson;
+  try {
+    simplifiedJson = JSON.parse(simplifyResponse.choices[0].message.content);
   } catch (error) {
-    console.error('Error:', error.message);
+    console.error("Failed to parse JSON response:", error);
+    throw error;
   }
+  return simplifiedJson;
 }
 
-function constructConceptJson(content) {
-  const lines = content.split('\n');
-  const jsonObject = { "CONCEPTS": {} };
-  let currentSubheading = '';
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-  lines.forEach(line => {
-    if (line.startsWith('## ')) {
-      currentSubheading = line.substring(3);
-      jsonObject.CONCEPTS[currentSubheading] = '';
-    } else if (currentSubheading) {
-      jsonObject.CONCEPTS[currentSubheading] += line + '\n';
-    }
-  });
 
-  return jsonObject;
-}
+app.use(express.urlencoded({ extended: true }));
 
-function constructDiagramJson(content) {
-  const lines = content.split('\n');
-  const jsonObject = { "CODE": {} };
-  let currentDiagramTitle = '';
 
-  lines.forEach(line => {
-    if (line.startsWith('```mermaid')) {
-      currentDiagramTitle = 'Diagram' + (Object.keys(jsonObject.CODE).length + 1);
-      jsonObject.CODE[currentDiagramTitle] = '';
-    } else if (line.startsWith('```')) {
-      currentDiagramTitle = '';
-    } else if (currentDiagramTitle) {
-      jsonObject.CODE[currentDiagramTitle] += line + '\n';
-    }
-  });
+app.get('/', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Mermaid Diagram Generator</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        form { margin-bottom: 20px; }
+        input[type="text"] { padding: 8px; width: 300px; }
+        button { padding: 8px 12px; }
+      </style>
+    </head>
+    <body>
+      <h1>Mermaid Diagram Generator</h1>
+      <form action="/generate" method="POST">
+        <label for="concept">Enter a concept:</label>
+        <input type="text" id="concept" name="concept" required>
+        <button type="submit">Generate</button>
+      </form>
+    </body>
+    </html>
+  `);
+});
 
-  return jsonObject;
-}
 
-function writeToFile(fileName, jsonObject) {
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  const filePath = path.join(__dirname, fileName);
-
-  const fileContent = JSON.stringify(jsonObject, null, 2);
-
-  fs.writeFileSync(filePath, fileContent, 'utf8');
-  console.log(`File written: ${filePath}`);
-}
-
-async function mergeJsonFiles(conceptsJson, diagramsJson) {
-  const mergedContent = {
-    "CONTENT": []
-  };
-
-  Object.keys(conceptsJson.CONCEPTS).forEach((subheading, index) => {
-    mergedContent.CONTENT.push({
-      "heading": subheading,
-      "concept": conceptsJson.CONCEPTS[subheading],
-      "diagram": diagramsJson.CODE['Diagram' + (index + 1)] || ''
+app.post('/generate', async (req, res) => {
+  const { concept } = req.body;
+  try {
+    const result = await processConcept(concept);
+    let diagramsHtml = '';
+    result.diagrams.forEach((diagram, index) => {
+      diagramsHtml += `<h2>Diagram ${index + 1} - ${diagram.title}</h2>
+      <div class="mermaid">
+        ${diagram.code}
+      </div>`;
     });
-  });
 
-  return mergedContent;
-}
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Generated Mermaid Diagrams</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 40px; }
+          h2 { margin-top: 40px; }
+          .mermaid { background: #f4f4f4; padding: 10px; border: 1px solid #ccc; }
+          a { text-decoration: none; color: blue; }
+        </style>
+        <!-- Load Mermaid from CDN -->
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+        <script>
+          // Initialize Mermaid after the page loads
+          document.addEventListener('DOMContentLoaded', function() {
+            mermaid.initialize({ startOnLoad: true });
+          });
+        </script>
+      </head>
+      <body>
+        <h1>Mermaid Diagrams for Concept: ${concept}</h1>
+        ${diagramsHtml}
+        <br/>
+        <a href="/">&#8592; Go back</a>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error("Error processing concept:", error);
+    res.status(500).send("Internal Server Error. Please try again later.");
+  }
+});
 
-function generateHtmlFromJson(inputFile, outputFile) {
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  const inputFilePath = path.join(__dirname, inputFile);
-  const outputFilePath = path.join(__dirname, outputFile);
-
-  const jsonData = JSON.parse(fs.readFileSync(inputFilePath, 'utf8'));
-
-
-  let htmlContent = '<html><body>';
-  jsonData.CONTENT.forEach(item => {
-    htmlContent += `<h1>${item.heading}</h1>`;
-    htmlContent += `<p>${item.concept}</p>`;
-    if (item.diagram) {
-      htmlContent += `<div class="mermaid">${item.diagram}</div>`;
-    }
-  });
-  htmlContent += `
-    <script type="module">
-      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@9/dist/mermaid.esm.min.mjs';
-      mermaid.initialize({ startOnLoad: true });
-    </script>
-  </body></html>`;
-
-  fs.writeFileSync(outputFilePath, htmlContent, 'utf8');
-  console.log(`HTML file written: ${outputFilePath}`);
-}
-
-//usage
-processConcept('Explain the importance of low latency in Large Language Models (LLMs).');
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
