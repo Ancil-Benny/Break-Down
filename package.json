@@ -1,0 +1,26 @@
+{
+  "name": "break-down",
+  "version": "1.0.0",
+  "description": "",
+  "main": "api-node/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node api-node/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start-backend": "node api-node/server.js",
+    "start-frontend": "npm run dev --prefix Break-Down",
+    "dev": "concurrently \"npm:start-backend\" \"npm:start-frontend\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@mistralai/mistralai": "^1.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
