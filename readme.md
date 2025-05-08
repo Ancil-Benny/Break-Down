@@ -1,0 +1,1 @@
+Project demonstrates intergrating LLM API for simplifying study concepts.
